@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 
@@ -2206,11 +2207,19 @@
             }
             
             if (titles.length > 0) {
-                tickerTitles = titles;
-                tickerLinks = links;
                 lastFetchTime = t;
-                triggerTickerFlash();
-                initTicker();
+                
+                // Check if content actually changed before resetting the ticker
+                const hasChanged = titles.length !== tickerTitles.length ||
+                    titles.some((title, i) => title !== tickerTitles[i]);
+                
+                if (hasChanged) {
+                    tickerTitles = titles;
+                    tickerLinks = links;
+                    triggerTickerFlash();
+                    initTicker();
+                }
+                // If content hasn't changed, do nothing — let the current cycle continue
             }
         } catch (e) {
             console.warn('Ticker fetch failed:', e.message);
