@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WIDE_MCR_TOOLS_CMG-001</title>
+    <title>WIDE_MCR_TOOLS_CMG-V1M</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>
         :root {
@@ -2026,6 +2026,60 @@
     })();
 
     // =============================================
+    // INJECT CSS TO HIDE YOUTUBE LIVE BADGE
+    // =============================================
+    (function injectStyles() {
+        const style = document.createElement('style');
+        style.textContent = `
+            .player-container {
+                position: relative;
+                overflow: hidden;
+            }
+            .player-container::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 150px;
+                height: 50px;
+                background: linear-gradient(135deg, rgba(18,18,18,0.95) 0%, rgba(18,18,18,0.8) 40%, transparent 100%);
+                z-index: 10;
+                pointer-events: none;
+                opacity: 1;
+                transition: opacity 0.3s ease;
+            }
+            .player-container:hover::before {
+                opacity: 0;
+            }
+            .player-container::after {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 60px;
+                background: linear-gradient(to bottom, rgba(18,18,18,0.7) 0%, transparent 100%);
+                z-index: 9;
+                pointer-events: none;
+                opacity: 1;
+                transition: opacity 0.3s ease;
+            }
+            .player-container:hover::after {
+                opacity: 0;
+            }
+        `;
+        document.head.appendChild(style);
+    })();
+
+    // =============================================
+    // WORKING CORS PROXIES
+    // =============================================
+    const WORKING_PROXIES = [
+        (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+        (url) => `https://cors.eu.org/${url}`,
+    ];
+
+    // =============================================
     // TICKER CODE
     // =============================================
     let tickerTitles = [],
@@ -2042,13 +2096,8 @@
         BASE_URL = "https://www.athletiko.gr/latest-news",
         MIN_WORD_COUNT = 3,
         TICKER_FETCH_INTERVAL = 30000,
-        FETCH_TIMEOUT = 10000,
+        TICKER_FETCH_TIMEOUT = 15000,
         FLASH_DURATION = 800;
-
-    const WORKING_PROXIES = [
-        (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-        (url) => `https://cors.eu.org/${url}`,
-    ];
 
     let ytApiReadyGlobal = false;
 
@@ -2072,32 +2121,6 @@
         return s ? s.trim().split(/\s+/).filter((w) => w.length > 0).length : 0;
     }
 
-    async function fetchWithProxy(url, timeout = 10000) {
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), timeout);
-
-        const promises = WORKING_PROXIES.map(async (proxyFn) => {
-            const proxyUrl = proxyFn(url);
-            const response = await fetch(proxyUrl, {
-                signal: controller.signal,
-                cache: "no-store",
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const text = await response.text();
-            if (!text || text.length < 500) throw new Error("Short response");
-            return text;
-        });
-
-        try {
-            const result = await Promise.any(promises);
-            clearTimeout(id);
-            return result;
-        } catch (e) {
-            clearTimeout(id);
-            throw e;
-        }
-    }
-
     function triggerTickerFlash() {
         const ticker = document.getElementById("news-ticker");
         if (!ticker) return;
@@ -2110,17 +2133,42 @@
     async function fetchNewsTicker() {
         if (isFetchingTicker) return;
         isFetchingTicker = true;
-
+        
         try {
             const t = Date.now();
             const url = `${BASE_URL}?_t=${t}`;
-            const html = await fetchWithProxy(url);
-
+            
+            let html = null;
+            for (const proxyFn of WORKING_PROXIES) {
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), TICKER_FETCH_TIMEOUT);
+                    
+                    const response = await fetch(proxyFn(url), {
+                        signal: controller.signal,
+                        cache: "no-store",
+                    });
+                    
+                    clearTimeout(timeout);
+                    
+                    if (!response.ok) continue;
+                    
+                    html = await response.text();
+                    if (html && html.length > 500) break;
+                } catch (e) {
+                    continue;
+                }
+            }
+            
+            if (!html || html.length < 500) {
+                throw new Error('All proxies failed');
+            }
+            
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, "text/html");
             const titles = [];
             const links = [];
-
+            
             doc.querySelectorAll("a[href]").forEach((a) => {
                 const h2 = a.querySelector("h2");
                 if (h2) {
@@ -2137,7 +2185,26 @@
                     }
                 }
             });
-
+            
+            if (titles.length === 0) {
+                doc.querySelectorAll("h2").forEach((h2) => {
+                    const tx = h2.textContent?.trim();
+                    if (tx && tx.length > 5 && tx.length < 200 && countWords(tx) >= MIN_WORD_COUNT && !titles.includes(tx)) {
+                        const a = h2.closest("a") || h2.querySelector("a");
+                        let hr = "https://www.athletiko.gr";
+                        if (a) {
+                            const rh = a.getAttribute("href");
+                            if (rh) {
+                                if (rh.startsWith("http")) hr = rh;
+                                else if (rh.startsWith("/")) hr = "https://www.athletiko.gr" + rh;
+                            }
+                        }
+                        titles.push(tx);
+                        links.push(hr);
+                    }
+                });
+            }
+            
             if (titles.length > 0) {
                 tickerTitles = titles;
                 tickerLinks = links;
@@ -2250,10 +2317,7 @@
             this.FETCH_TIMEOUT = 12000;
             this.STREAM_END_CONFIRM_COUNT = 2;
 
-            this.CORS_PROXIES = [
-                (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-                (url) => `https://cors.eu.org/${url}`,
-            ];
+            this.CORS_PROXIES = WORKING_PROXIES;
 
             this.userIconSVG = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
             this.previousViewerCounts = {};
@@ -2261,7 +2325,7 @@
             this.MILESTONE_THRESHOLD = 1000;
             this.autoLoadDone = {};
             this.closedSlots = {};
-
+            
             this.channelConfigs = {
                 1: {
                     channelHandle: "@sport24greecetv",
@@ -2289,32 +2353,17 @@
                     urls: ["https://www.youtube.com/@athletikogr/streams", "https://www.youtube.com/@athletikogr/live"],
                 },
             };
-
-            // FIX #1: Unified cache — keyed by channelHandle only
-            this.channelStreamsCache = {};
-            this.channelCacheTimestamps = {};
+            
+            this.liveStreamsCache = {};
+            this.cacheTimestamps = {};
             this.modalLiveStreams = [];
 
             console.log('🚀 StreamApp initialized');
-            console.log('📍 Using proxies: CodeTabs, Cors.eu');
 
             this._loadSavedViewerCounts();
             this.initLiveStreamDropdowns();
             this.initYTApiCheck();
             this._startBadgeProtection();
-        }
-
-        // FIX #2: Helper to get channelHandle from slot
-        _getChannelHandle(slot) {
-            const cfg = this.channelConfigs[slot];
-            return cfg ? cfg.channelHandle : null;
-        }
-
-        // FIX #3: Unified cache getter
-        _getCachedStreams(slot) {
-            const handle = this._getChannelHandle(slot);
-            if (!handle) return null;
-            return this.channelStreamsCache[handle] || null;
         }
 
         _loadSavedViewerCounts() {
@@ -2368,11 +2417,8 @@
         async autoLoadBestStream(slot) {
             if (this.autoLoadDone[slot] || this.closedSlots[slot]) return;
             this.autoLoadDone[slot] = true;
-
-            // FIX #4: Use unified cache getter
-            const cache = this._getCachedStreams(slot);
+            const cache = this.liveStreamsCache[slot];
             if (!cache) return;
-
             const { live, upcoming } = cache;
             let bestStream = null;
             if (live && live.length > 0) {
@@ -2392,10 +2438,10 @@
             if (!renderer) return null;
             const videoId = renderer.videoId;
             if (!videoId || videoId.length !== 11) return null;
-
+            
             let title = renderer.title?.runs?.[0]?.text || renderer.title?.simpleText || "Untitled";
             let isLive = false, isUpcoming = false, viewers = null, scheduledTime = null, scheduledTimestamp = null;
-
+            
             const badges = renderer.badges || [];
             for (const b of badges) {
                 const mr = b?.metadataBadgeRenderer;
@@ -2405,7 +2451,7 @@
                 }
                 if (b?.liveBadge) isLive = true;
             }
-
+            
             const overlays = renderer.thumbnailOverlays || [];
             for (const ov of overlays) {
                 const sr = ov?.thumbnailOverlayTimeStatusRenderer;
@@ -2415,7 +2461,7 @@
                     if (style === "UPCOMING") isUpcoming = true;
                 }
             }
-
+            
             const vct = renderer.viewCountText?.runs?.map((r) => r.text).join("") || renderer.viewCountText?.simpleText || "";
             if (vct) {
                 const lower = vct.toLowerCase();
@@ -2429,7 +2475,7 @@
                     isLive = false;
                 }
             }
-
+            
             const ued = renderer.upcomingEventData;
             if (ued) {
                 isUpcoming = true;
@@ -2441,17 +2487,17 @@
                     scheduledTime = sd.getHours().toString().padStart(2, "0") + ":" + sd.getMinutes().toString().padStart(2, "0");
                 }
             }
-
+            
             if (isLive) isUpcoming = false;
             if (!isLive && !isUpcoming) return null;
-
+            
             return { videoId, title, isLive, isUpcoming, viewers, scheduledTime, scheduledTimestamp };
         }
 
         _parseStreamsFromHTML(html) {
             const found = new Map();
-
-            const dataMatch = html.match(/var\s+ytInitialData\s*=\s*({.+?})\s*;/s) || html.match(/ytInitialData\s*=\s*({.+?})\s*;/s);
+            
+            const dataMatch = html.match(/var ytInitialData = ({.+?});/s) || html.match(/ytInitialData\s*=\s*({.+?});/s);
             if (dataMatch) {
                 try {
                     const data = JSON.parse(dataMatch[1]);
@@ -2459,7 +2505,7 @@
                     for (const tab of tabs) {
                         const content = tab?.tabRenderer?.content;
                         if (!content) continue;
-
+                        
                         const richGrid = content?.richGridRenderer;
                         if (richGrid) {
                             for (const item of richGrid?.contents || []) {
@@ -2470,7 +2516,7 @@
                                 }
                             }
                         }
-
+                        
                         const sectionList = content?.sectionListRenderer;
                         if (sectionList) {
                             for (const section of sectionList?.contents || []) {
@@ -2499,8 +2545,8 @@
                     console.warn('Failed to parse ytInitialData');
                 }
             }
-
-            const playerMatch = html.match(/var\s+ytInitialPlayerResponse\s*=\s*({.+?})\s*;/s) || html.match(/ytInitialPlayerResponse\s*=\s*({.+?})\s*;/s);
+            
+            const playerMatch = html.match(/var ytInitialPlayerResponse = ({.+?});/s) || html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/s);
             if (playerMatch) {
                 try {
                     const pr = JSON.parse(playerMatch[1]);
@@ -2512,7 +2558,7 @@
                             let viewers = null;
                             const lbd = pr?.microformat?.playerMicroformatRenderer?.liveBroadcastDetails;
                             if (lbd?.concurrentViewers) viewers = lbd.concurrentViewers;
-
+                            
                             found.set(vd.videoId, {
                                 videoId: vd.videoId,
                                 title: vd.title || "Live Stream",
@@ -2526,75 +2572,73 @@
                     }
                 } catch (e) {}
             }
-
+            
             const live = [];
             const upcoming = [];
             for (const stream of found.values()) {
                 if (stream.isLive) live.push(stream);
                 else if (stream.isUpcoming) upcoming.push(stream);
             }
-
+            
             upcoming.sort((a, b) => (a.scheduledTimestamp || 0) - (b.scheduledTimestamp || 0));
-
+            
             return { live, upcoming };
         }
 
         async _fetchPageHTML(url) {
             const t = Date.now();
             const cacheBustedUrl = `${url}${url.includes("?") ? "&" : "?"}_t=${t}`;
-
+            
             const promises = this.CORS_PROXIES.map(async (proxyFn) => {
                 const proxyUrl = proxyFn(cacheBustedUrl);
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT);
-
+                
                 try {
                     const response = await fetch(proxyUrl, {
                         signal: controller.signal,
                         cache: "no-store",
                     });
-
+                    
                     clearTimeout(timeout);
-
+                    
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
+                    
                     const html = await response.text();
-
+                    
                     if (!html || html.length < 1000) throw new Error("Response too short");
-                    if (!html.includes("ytInitialData")) throw new Error("Not a YouTube page");
-
+                    if (!html.includes("ytInitialData") && !html.includes("ytInitialPlayerResponse")) throw new Error("Not a YouTube page");
+                    
                     return html;
                 } catch (e) {
                     clearTimeout(timeout);
                     throw e;
                 }
             });
-
+            
             return Promise.any(promises);
         }
 
-        // FIX #5: Cache always keyed by channelHandle
         async _fetchAllStreamsForChannel(cfg) {
             if (!cfg?.urls?.length) return { live: [], upcoming: [] };
 
             const cacheKey = cfg.channelHandle;
             const now = Date.now();
 
-            if (this.channelCacheTimestamps[cacheKey] && (now - this.channelCacheTimestamps[cacheKey]) < 60000) {
-                const cached = this.channelStreamsCache[cacheKey];
-                if (cached) return cached;
+            if (this.cacheTimestamps[cacheKey] && (now - this.cacheTimestamps[cacheKey]) < 60000) {
+                return this.liveStreamsCache[cacheKey] || { live: [], upcoming: [] };
             }
 
             console.log(`🔄 Fetching ${cfg.channelName}...`);
 
             const allLive = new Map();
             const allUpcoming = new Map();
-
+            
             for (const url of cfg.urls) {
                 try {
                     const html = await this._fetchPageHTML(url);
                     const { live, upcoming } = this._parseStreamsFromHTML(html);
-
+                    
                     for (const stream of live) {
                         if (!allLive.has(stream.videoId)) allLive.set(stream.videoId, stream);
                     }
@@ -2607,17 +2651,16 @@
                     console.warn(`Failed ${url}:`, e.message);
                 }
             }
-
+            
             const live = Array.from(allLive.values());
             const upcoming = Array.from(allUpcoming.values());
 
             console.log(`📺 ${cfg.channelName}: ${live.length} live, ${upcoming.length} upcoming`);
 
-            const result = { live, upcoming };
-            this.channelStreamsCache[cacheKey] = result;
-            this.channelCacheTimestamps[cacheKey] = now;
+            this.liveStreamsCache[cacheKey] = { live, upcoming };
+            this.cacheTimestamps[cacheKey] = now;
 
-            return result;
+            return { live, upcoming };
         }
 
         initYTApiCheck() {
@@ -2635,95 +2678,80 @@
                     this.onYTApiReady();
                 } else if (attempts >= 50) {
                     clearInterval(poll);
-                    console.warn('⚠️ YouTube API failed to load after 5 seconds');
                 }
             }, 100);
         }
 
         onYTApiReady() {
-            console.log('✅ YouTube API ready');
-            const pending = [...this.pendingLoads];
+            this.pendingLoads.forEach((i) => this.createYTPlayer(i.slot, i.vidId));
             this.pendingLoads = [];
-            pending.forEach((i) => this.createYTPlayer(i.slot, i.vidId));
             this.startMutePolling();
         }
 
         createYTPlayer(slot, vidId) {
-            // FIX #6: Better guard for YT API readiness
-            if (!window.YT || !window.YT.Player || typeof window.YT.Player !== "function") {
-                console.log(`⏳ YT API not ready, queuing slot ${slot}`);
-                // Avoid duplicate pending entries
-                if (!this.pendingLoads.some(p => p.slot === slot && p.vidId === vidId)) {
-                    this.pendingLoads.push({ slot, vidId });
-                }
-                return;
-            }
-
             const ct = document.getElementById(`player-${slot}`)?.parentElement;
-            if (!ct) {
-                console.warn(`❌ No container found for player-${slot}`);
+            if (!ct || !window.YT?.Player) {
+                this.pendingLoads.push({ slot, vidId });
                 return;
             }
-
+            
             if (this.players[slot]) {
                 try { this.players[slot].destroy(); } catch (e) {}
                 delete this.players[slot];
             }
-
+            
             const od = document.getElementById(`player-${slot}`);
             if (od) od.remove();
-
+            
             const nd = document.createElement("div");
             nd.id = `player-${slot}`;
             nd.style.cssText = "display:block;position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;";
             ct.appendChild(nd);
-
+            
             const ph = document.getElementById(`ph-${slot}`);
             if (ph) ph.style.display = "none";
-
-            try {
-                this.players[slot] = new YT.Player(`player-${slot}`, {
-                    videoId: vidId,
-                    host: "https://www.youtube-nocookie.com",
-                    playerVars: {
-                        autoplay: 1, mute: 1, controls: 1, enablejsapi: 1, fs: 1,
-                        iv_load_policy: 3, modestbranding: 1, playsinline: 1, rel: 0,
-                        origin: window.location.origin,
+            
+            this.players[slot] = new YT.Player(`player-${slot}`, {
+                videoId: vidId,
+                host: "https://www.youtube-nocookie.com",
+                playerVars: {
+                    autoplay: 1,
+                    mute: 1,
+                    controls: 1,
+                    enablejsapi: 1,
+                    fs: 1,
+                    iv_load_policy: 3,
+                    modestbranding: 1,
+                    playsinline: 1,
+                    rel: 0,
+                    showinfo: 0,
+                    origin: window.location.origin,
+                },
+                events: {
+                    onReady: (e) => {
+                        e.target.playVideo();
+                        const playerEl = document.getElementById(`player-${slot}`);
+                        if (playerEl) playerEl.style.opacity = "1";
                     },
-                    events: {
-                        onReady: (e) => {
-                            console.log(`▶️ Player ready for slot ${slot}`);
-                            e.target.playVideo();
-                            const playerEl = document.getElementById(`player-${slot}`);
-                            if (playerEl) playerEl.style.opacity = "1";
-                        },
-                        onStateChange: (e) => {
-                            if (e.data === YT.PlayerState.ENDED) this._handleStreamEnded(slot);
-                        },
-                        onError: (e) => {
-                            console.warn(`❌ Player error slot ${slot}: code ${e.data}`);
-                            if ([100, 101, 150].includes(e.data)) this._handleStreamEnded(slot);
-                        },
+                    onStateChange: (e) => {
+                        if (e.data === YT.PlayerState.ENDED) this._handleStreamEnded(slot);
                     },
-                });
-            } catch (err) {
-                console.error(`Failed to create YT player for slot ${slot}:`, err);
-            }
+                    onError: (e) => {
+                        if ([100, 101, 150].includes(e.data)) this._handleStreamEnded(slot);
+                    },
+                },
+            });
         }
 
         startMutePolling() {
             if (!this.muteCheckInterval) {
                 this.muteCheckInterval = setInterval(() => {
                     const um = Object.keys(this.players).filter(s => {
-                        try { return this.players[s] && typeof this.players[s].isMuted === 'function' && !this.players[s].isMuted(); } catch (e) { return false; }
+                        try { return !this.players[s]?.isMuted?.(); } catch (e) { return false; }
                     });
                     if (um.length > 1) {
                         const keep = um.find(s => s !== this.currentUnmutedSlot) || um[0];
-                        um.forEach(s => {
-                            if (s !== keep) {
-                                try { this.players[s].mute(); } catch (e) {}
-                            }
-                        });
+                        um.forEach(s => { if (s !== keep) this.players[s]?.mute(); });
                         this.currentUnmutedSlot = keep;
                     } else {
                         this.currentUnmutedSlot = um[0] || null;
@@ -2733,7 +2761,7 @@
         }
 
         buildChatUrl(vidId) {
-            return `https://www.youtube.com/live_chat?v=${vidId}&embed_domain=${window.location.hostname}&dark_theme=1`;
+            return `https://www.youtube.com/live_chat?v=${vidId}&embed_domain=${window.location.hostname || 'localhost'}&dark_theme=1`;
         }
 
         openModal(slotId) {
@@ -2760,35 +2788,18 @@
             this.activeSlot = null;
         }
 
-        // FIX #7: Improved confirmModal with better error handling and logging
         confirmModal() {
-            if (!this.activeSlot) {
-                console.warn('❌ confirmModal: no active slot');
-                return;
-            }
-            const rawUrl = (this.inputUrl?.value || "").trim();
-            console.log(`🔗 confirmModal: raw input = "${rawUrl}"`);
-
-            if (!rawUrl) {
-                alert("Please enter a YouTube URL");
-                return;
-            }
-
-            const vid = this.getId(rawUrl);
-            console.log(`🎯 confirmModal: extracted video ID = "${vid}"`);
-
+            if (!this.activeSlot) return;
+            const url = (this.inputUrl?.value || "").trim();
+            const vid = this.getId(url);
             if (!vid) {
-                alert("Invalid YouTube URL. Please use a format like:\nhttps://www.youtube.com/watch?v=VIDEO_ID\nhttps://youtu.be/VIDEO_ID\nhttps://www.youtube.com/live/VIDEO_ID");
+                alert("Invalid YouTube URL");
                 return;
             }
-
             const slot = this.activeSlot;
-            this.closeModal();
             this.hideDropdown(slot);
+            this.closeModal();
             delete this.closedSlots[slot];
-
-            const url = `https://www.youtube.com/watch?v=${vid}`;
-            console.log(`📺 Loading video ${vid} into slot ${slot}`);
             this.loadVideo(slot, vid, url);
             this.fetchChannelName(url, slot);
         }
@@ -2809,12 +2820,6 @@
 
         refreshModalDropdown() {
             if (this.activeSlot) {
-                // FIX #8: Invalidate cache before refresh
-                const handle = this._getChannelHandle(this.activeSlot);
-                if (handle) {
-                    delete this.channelStreamsCache[handle];
-                    delete this.channelCacheTimestamps[handle];
-                }
                 this.resetModalDropdown();
                 this.fetchModalLiveStreams(this.activeSlot);
             }
@@ -2822,16 +2827,12 @@
 
         async fetchModalLiveStreams(slot) {
             const cfg = this.channelConfigs[slot];
-            if (!cfg) {
-                this.showModalDropdownError("No channel configured for this slot");
-                return;
-            }
+            if (!cfg) return;
             try {
                 const { live, upcoming } = await this._fetchAllStreamsForChannel(cfg);
                 this.populateModalDropdown(live, upcoming);
             } catch (e) {
-                console.warn(`Modal fetch failed for slot ${slot}:`, e);
-                this.showModalDropdownError("Failed to load streams");
+                this.showModalDropdownError("Failed to load");
             }
         }
 
@@ -2839,14 +2840,17 @@
             const dl = document.getElementById("modal-dropdown-list");
             if (!dl) return;
             dl.innerHTML = "";
-
+            
             if (!live.length && !upcoming.length) {
-                dl.innerHTML = '<div class="dropdown-error">No streams found<div class="dropdown-error-retry" onclick="app.refreshModalDropdown()">Retry</div></div>';
+                dl.innerHTML = '<div class="dropdown-error">No streams found</div>';
                 return;
             }
-
+            
             if (live.length) {
-                dl.innerHTML += '<div class="dropdown-section-header">🔴 Live Now</div>';
+                const hdr = document.createElement("div");
+                hdr.className = "dropdown-section-header";
+                hdr.textContent = "🔴 Live Now";
+                dl.appendChild(hdr);
                 live.forEach(s => {
                     const it = document.createElement("div");
                     it.className = "dropdown-item";
@@ -2855,9 +2859,12 @@
                     dl.appendChild(it);
                 });
             }
-
+            
             if (upcoming.length) {
-                dl.innerHTML += '<div class="dropdown-section-header">📅 Upcoming</div>';
+                const hdr = document.createElement("div");
+                hdr.className = "dropdown-section-header";
+                hdr.textContent = "📅 Upcoming";
+                dl.appendChild(hdr);
                 upcoming.forEach(s => {
                     const it = document.createElement("div");
                     it.className = "dropdown-item upcoming-item";
@@ -2871,35 +2878,20 @@
 
         showModalDropdownError(msg) {
             const dl = document.getElementById("modal-dropdown-list");
-            if (dl) dl.innerHTML = `<div class="dropdown-error">${this._escapeHtml(msg)}<div class="dropdown-error-retry" onclick="app.refreshModalDropdown()">Retry</div></div>`;
+            if (dl) dl.innerHTML = `<div class="dropdown-error">${msg}<div class="dropdown-error-retry" onclick="window.app?.refreshModalDropdown()">Retry</div></div>`;
         }
 
-        // FIX #9: Improved selectModalStream with proper ordering and logging
         selectModalStream(stream) {
-            if (!stream || !stream.videoId) {
-                console.warn('❌ selectModalStream: invalid stream object');
-                return;
-            }
-
-            console.log(`🎯 selectModalStream: ${stream.title} (${stream.videoId})`);
-
-            const selectedEl = document.getElementById("modal-dropdown-selected");
-            if (selectedEl) selectedEl.textContent = stream.title;
-
+            const ht = document.getElementById("modal-dropdown-selected");
+            if (ht) ht.textContent = stream.title;
             const dd = document.getElementById("modal-stream-dropdown");
             if (dd) dd.classList.remove("open");
-
+            
             const slot = this.activeSlot;
-            if (!slot) {
-                console.warn('❌ selectModalStream: no active slot');
-                return;
-            }
-
-            // Close modal first, then load
-            this.closeModal();
             this.hideDropdown(slot);
+            this.closeModal();
             delete this.closedSlots[slot];
-
+            
             const url = `https://www.youtube.com/watch?v=${stream.videoId}`;
             this.loadVideo(slot, stream.videoId, url);
             this.fetchChannelName(url, slot);
@@ -2907,36 +2899,43 @@
 
         loadVideo(slot, vidId, originalUrl = null) {
             if (!slot || !vidId) {
-                console.warn(`❌ loadVideo: missing slot(${slot}) or vidId(${vidId})`);
+                console.error('loadVideo: Missing slot or vidId', { slot, vidId });
                 return;
             }
-
-            console.log(`📺 loadVideo: slot=${slot}, vidId=${vidId}`);
-
+            
+            console.log(`📺 Loading video ${vidId} in slot ${slot}`);
+            
             this._stopRealtimeLoop(slot);
             delete this.closedSlots[slot];
 
             const te = document.getElementById(`title-${slot}`);
-            if (te) { te.innerText = "Connecting..."; te.style.color = "var(--accent-blue)"; }
+            if (te) {
+                te.innerText = "Connecting...";
+                te.style.color = "var(--accent-blue)";
+            }
 
             const bd = document.getElementById(`badge-${slot}`);
             const bc = document.getElementById(`badge-content-${slot}`);
-            if (bd) { bd.style.display = "flex"; bd.style.visibility = "visible"; }
+            if (bd) {
+                bd.style.display = "flex";
+                bd.style.visibility = "visible";
+            }
             if (bc) bc.innerHTML = `${this.userIconSVG}<span></span>`;
 
             if (this.ytApiReady && window.YT?.Player) {
                 this.createYTPlayer(slot, vidId);
             } else {
-                console.log(`⏳ YT API not ready, queuing slot ${slot}`);
-                // Remove any existing pending for this slot
-                this.pendingLoads = this.pendingLoads.filter(p => p.slot !== slot);
                 this.pendingLoads.push({ slot, vidId });
             }
 
             if (slot === "main") {
                 const cf = document.getElementById("frame-chat");
                 const cp = document.getElementById("ph-chat");
-                if (cf && cp) { cp.style.display = "none"; cf.style.display = "block"; cf.src = this.buildChatUrl(vidId); }
+                if (cf && cp) {
+                    cp.style.display = "none";
+                    cf.style.display = "block";
+                    cf.src = this.buildChatUrl(vidId);
+                }
             }
 
             this._ensureSlotState(slot);
@@ -2945,8 +2944,8 @@
             this.slotStates[slot].wasLive = true;
             this.slotStates[slot].notLiveCount = 0;
 
-            const closeBtn = document.getElementById(`close-${slot}`);
-            if (closeBtn) closeBtn.style.display = "flex";
+            const cb = document.getElementById(`close-${slot}`);
+            if (cb) cb.style.display = "flex";
 
             this._startRealtimeLoop(slot);
         }
@@ -2957,16 +2956,17 @@
             st.handlingEnd = true;
 
             const cfg = this.channelConfigs[slot];
-            if (!cfg) { this.closeStream(slot, false); return; }
+            if (!cfg) {
+                this.closeStream(slot, false);
+                return;
+            }
 
             const te = document.getElementById(`title-${slot}`);
             if (te) te.innerText = "Checking for next stream...";
 
             try {
-                // FIX #10: Invalidate cache by channelHandle
-                const handle = cfg.channelHandle;
-                delete this.channelStreamsCache[handle];
-                delete this.channelCacheTimestamps[handle];
+                delete this.liveStreamsCache[cfg.channelHandle];
+                delete this.cacheTimestamps[cfg.channelHandle];
 
                 const { live, upcoming } = await this._fetchAllStreamsForChannel(cfg);
                 const currentVidId = st.vidId;
@@ -2980,16 +2980,13 @@
                     this.closeStream(slot, false);
                 }
             } catch (e) {
-                console.warn(`Stream end handling failed for slot ${slot}:`, e);
                 this.closeStream(slot, false);
             }
         }
 
         closeStream(slot, isManualClose = true) {
             if (!slot) return;
-
-            console.log(`🔴 closeStream: slot=${slot}, manual=${isManualClose}`);
-
+            
             this._stopRealtimeLoop(slot);
             delete this.slotStates[slot];
             delete this.lastKnownViewerCounts[slot];
@@ -2998,11 +2995,16 @@
             if (isManualClose) this.closedSlots[slot] = true;
 
             const te = document.getElementById(`title-${slot}`);
-            if (te) { te.innerText = "Click to Add Stream"; te.style.color = ""; }
+            if (te) {
+                te.innerText = "Click to Add Stream";
+                te.style.color = "";
+            }
 
             if (this.players[slot]) {
-                try { this.players[slot].stopVideo(); } catch (e) {}
-                try { this.players[slot].destroy(); } catch (e) {}
+                try {
+                    this.players[slot].stopVideo();
+                    this.players[slot].destroy();
+                } catch (e) {}
                 delete this.players[slot];
             }
 
@@ -3010,8 +3012,8 @@
 
             const ct = document.getElementById(`player-${slot}`)?.parentElement;
             if (ct) {
-                const existingPlayer = document.getElementById(`player-${slot}`);
-                if (existingPlayer) existingPlayer.remove();
+                const od = document.getElementById(`player-${slot}`);
+                if (od) od.remove();
                 const nd = document.createElement("div");
                 nd.id = `player-${slot}`;
                 nd.style.cssText = "display:none;position:absolute;top:0;left:0;width:100%;height:100%;";
@@ -3020,20 +3022,26 @@
 
             const ph = document.getElementById(`ph-${slot}`);
             if (ph) ph.style.display = "flex";
-
+            
             const bd = document.getElementById(`badge-${slot}`);
-            if (bd) { bd.style.display = "none"; bd.style.visibility = "hidden"; }
-
+            if (bd) {
+                bd.style.display = "none";
+                bd.style.visibility = "hidden";
+            }
+            
             const bc = document.getElementById(`badge-content-${slot}`);
             if (bc) bc.innerHTML = "";
 
-            const closeBtn = document.getElementById(`close-${slot}`);
-            if (closeBtn) closeBtn.style.display = "none";
+            const cb = document.getElementById(`close-${slot}`);
+            if (cb) cb.style.display = "none";
 
             if (slot === "main") {
                 const cf = document.getElementById("frame-chat");
                 const cp = document.getElementById("ph-chat");
-                if (cf) { cf.style.display = "none"; cf.src = ""; }
+                if (cf) {
+                    cf.style.display = "none";
+                    cf.src = "";
+                }
                 if (cp) cp.style.display = "flex";
             }
 
@@ -3042,15 +3050,12 @@
         }
 
         showDropdownWithoutAutoLoad(slot) {
-            const wrapper = document.getElementById(`dropdown-wrapper-${slot}`);
-            if (wrapper) wrapper.classList.remove("hidden");
-
-            const selected = document.getElementById(`dropdown-selected-${slot}`);
-            if (selected) selected.textContent = "Choose a live stream...";
-
+            const wr = document.getElementById(`dropdown-wrapper-${slot}`);
+            if (wr) wr.classList.remove("hidden");
+            const ht = document.getElementById(`dropdown-selected-${slot}`);
+            if (ht) ht.textContent = "Choose a live stream...";
             const dd = document.getElementById(`stream-dropdown-${slot}`);
             if (dd) dd.classList.remove("open");
-
             this.fetchLiveStreamsWithoutAutoLoad(slot);
         }
 
@@ -3060,13 +3065,16 @@
             const dl = document.getElementById(`dropdown-list-${slot}`);
             const dc = document.getElementById(`dropdown-channel-${slot}`);
             if (!dl) return;
-
+            
             dl.innerHTML = '<div class="dropdown-loading"><div class="dropdown-loading-spinner"></div><span>Fetching...</span></div>';
             if (dc) dc.textContent = cfg.channelName;
-
+            
             try {
+                delete this.liveStreamsCache[cfg.channelHandle];
+                delete this.cacheTimestamps[cfg.channelHandle];
+                
                 const { live, upcoming } = await this._fetchAllStreamsForChannel(cfg);
-                // Cache is already stored in _fetchAllStreamsForChannel by channelHandle
+                this.liveStreamsCache[slot] = { live, upcoming };
                 if (live.length || upcoming.length) this.populateDropdown(slot, live, upcoming);
                 else this.showDropdownError(slot, "No streams found");
             } catch (e) {
@@ -3085,15 +3093,25 @@
                 }
             } catch (e) {
                 const te = document.getElementById(`title-${slot}`);
-                if (te) { te.innerText = "Connected"; te.style.color = "var(--text-secondary)"; }
+                if (te) {
+                    te.innerText = "Connected";
+                    te.style.color = "var(--text-secondary)";
+                }
             }
         }
 
         _ensureSlotState(slot) {
             if (!this.slotStates[slot]) {
                 this.slotStates[slot] = {
-                    vidId: null, timerId: null, fetching: false, realtimeActive: false,
-                    originalUrl: null, consecutiveFailures: 0, wasLive: false, notLiveCount: 0, handlingEnd: false,
+                    vidId: null,
+                    timerId: null,
+                    fetching: false,
+                    realtimeActive: false,
+                    originalUrl: null,
+                    consecutiveFailures: 0,
+                    wasLive: false,
+                    notLiveCount: 0,
+                    handlingEnd: false,
                 };
             }
         }
@@ -3110,7 +3128,10 @@
             const st = this.slotStates[slot];
             if (st) {
                 st.realtimeActive = false;
-                if (st.timerId) { clearTimeout(st.timerId); st.timerId = null; }
+                if (st.timerId) {
+                    clearTimeout(st.timerId);
+                    st.timerId = null;
+                }
             }
         }
 
@@ -3136,7 +3157,10 @@
 
             try {
                 const html = await this._fetchYouTubePageFast(st.vidId);
-                if (!html) { st.consecutiveFailures++; return; }
+                if (!html) {
+                    st.consecutiveFailures++;
+                    return;
+                }
 
                 const d = this._extractViewerData(html);
                 const isCurrentlyLive = d.isLive || d.isLiveNow;
@@ -3176,7 +3200,7 @@
             if (!c) return;
 
             const badge = document.getElementById(`badge-${slot}`);
-            if (badge && badge.style.display === "none") badge.style.display = "flex";
+            if (badge?.style.display === "none") badge.style.display = "flex";
 
             this.lastKnownViewerCounts[slot] = textStr;
             this._saveViewerCounts();
@@ -3184,16 +3208,22 @@
         }
 
         _escapeHtml(s) {
-            return String(s).replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]);
+            return String(s).replace(/[&<>"']/g, m => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;"
+            })[m]);
         }
 
         async _fetchYouTubePageFast(vidId) {
             const url = `https://www.youtube.com/watch?v=${vidId}&t=${Date.now()}`;
-
+            
             const promises = this.CORS_PROXIES.map(async (proxyFn) => {
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT);
-
+                
                 try {
                     const response = await fetch(proxyFn(url), {
                         signal: controller.signal,
@@ -3274,43 +3304,17 @@
             return String(Number(n) || 0).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
         }
 
-        // FIX #11: Improved getId with more URL patterns
         getId(url) {
             if (!url) return null;
             url = url.trim();
-
-            // Direct 11-char video ID
             if (/^[A-Za-z0-9_-]{11}$/.test(url)) return url;
-
-            // Standard patterns:
-            // youtube.com/watch?v=ID
-            // youtu.be/ID
-            // youtube.com/live/ID
-            // youtube.com/embed/ID
-            // youtube.com/v/ID
-            // youtube.com/shorts/ID
-            const patterns = [
-                /(?:youtube\.com\/watch\?.*v=)([a-zA-Z0-9_-]{11})/,
-                /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-                /(?:youtube\.com\/live\/)([a-zA-Z0-9_-]{11})/,
-                /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-                /(?:youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
-                /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-                /(?:youtube-nocookie\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-            ];
-
-            for (const pattern of patterns) {
-                const m = url.match(pattern);
-                if (m) return m[1];
-            }
-
-            // Try URL parsing as fallback
+            const m = url.match(/(?:youtube\.com\/watch\?.*v=|youtu\.be\/|youtube\.com\/live\/)([a-zA-Z0-9_-]{11})/);
+            if (m) return m[1];
             try {
                 const parsed = new URL(url);
                 const v = parsed.searchParams.get("v");
-                if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+                if (v && v.length === 11) return v;
             } catch (e) {}
-
             return null;
         }
 
@@ -3321,18 +3325,18 @@
         async fetchLiveStreams(slot) {
             const cfg = this.channelConfigs[slot];
             if (!cfg) return;
-
+            
             const dl = document.getElementById(`dropdown-list-${slot}`);
             const dc = document.getElementById(`dropdown-channel-${slot}`);
             if (!dl) return;
-
+            
             dl.innerHTML = '<div class="dropdown-loading"><div class="dropdown-loading-spinner"></div><span>Fetching...</span></div>';
             if (dc) dc.textContent = cfg.channelName;
-
+            
             try {
                 const { live, upcoming } = await this._fetchAllStreamsForChannel(cfg);
-                // FIX #12: Don't need separate cache by slot — _fetchAllStreamsForChannel caches by handle
-
+                this.liveStreamsCache[slot] = { live, upcoming };
+                
                 if (live.length || upcoming.length) {
                     this.populateDropdown(slot, live, upcoming);
                     if (!this.autoLoadDone[slot] && !this.closedSlots[slot]) {
@@ -3350,9 +3354,12 @@
             const dl = document.getElementById(`dropdown-list-${slot}`);
             if (!dl) return;
             dl.innerHTML = "";
-
+            
             if (live.length) {
-                dl.innerHTML += '<div class="dropdown-section-header">🔴 Live Now</div>';
+                const hdr = document.createElement("div");
+                hdr.className = "dropdown-section-header";
+                hdr.textContent = "🔴 Live Now";
+                dl.appendChild(hdr);
                 live.forEach(s => {
                     const it = document.createElement("div");
                     it.className = "dropdown-item";
@@ -3361,9 +3368,12 @@
                     dl.appendChild(it);
                 });
             }
-
+            
             if (upcoming.length) {
-                dl.innerHTML += '<div class="dropdown-section-header">📅 Upcoming</div>';
+                const hdr = document.createElement("div");
+                hdr.className = "dropdown-section-header";
+                hdr.textContent = "📅 Upcoming";
+                dl.appendChild(hdr);
                 upcoming.forEach(s => {
                     const it = document.createElement("div");
                     it.className = "dropdown-item upcoming-item";
@@ -3377,7 +3387,7 @@
 
         showDropdownError(slot, msg) {
             const dl = document.getElementById(`dropdown-list-${slot}`);
-            if (dl) dl.innerHTML = `<div class="dropdown-error"><div>${this._escapeHtml(msg)}</div><div class="dropdown-error-retry" onclick="app.refreshLiveStreams('${slot}')">Retry</div></div>`;
+            if (dl) dl.innerHTML = `<div class="dropdown-error"><div>${msg}</div><div class="dropdown-error-retry" onclick="window.app?.refreshLiveStreams('${slot}')">Retry</div></div>`;
         }
 
         toggleDropdown(slot) {
@@ -3385,63 +3395,58 @@
             if (dd) dd.classList.toggle("open");
         }
 
-        // FIX #13: Improved selectStream with null checks and logging
         selectStream(slot, stream) {
-            if (!stream || !stream.videoId) {
-                console.warn('❌ selectStream: invalid stream');
-                return;
-            }
-
-            console.log(`🎯 selectStream: slot=${slot}, video=${stream.videoId}, title=${stream.title}`);
-
-            const selected = document.getElementById(`dropdown-selected-${slot}`);
-            if (selected) selected.textContent = stream.title;
-
+            console.log(`📺 Selected stream: ${stream.title} for slot ${slot}`);
+            
+            const ht = document.getElementById(`dropdown-selected-${slot}`);
+            if (ht) ht.textContent = stream.title;
+            
             const dd = document.getElementById(`stream-dropdown-${slot}`);
             if (dd) dd.classList.remove("open");
-
+            
             this.hideDropdown(slot);
             delete this.closedSlots[slot];
-
+            
             const url = `https://www.youtube.com/watch?v=${stream.videoId}`;
             this.loadVideo(slot, stream.videoId, url);
             this.fetchChannelName(url, slot);
         }
 
-        skipDropdown(slot) { this.hideDropdown(slot); }
+        skipDropdown(slot) {
+            this.hideDropdown(slot);
+        }
 
         hideDropdown(slot) {
-            const wrapper = document.getElementById(`dropdown-wrapper-${slot}`);
-            if (wrapper) wrapper.classList.add("hidden");
+            const wr = document.getElementById(`dropdown-wrapper-${slot}`);
+            if (wr) wr.classList.add("hidden");
         }
 
         refreshLiveStreams(slot) {
-            // FIX #14: Invalidate cache on manual refresh
-            const handle = this._getChannelHandle(slot);
-            if (handle) {
-                delete this.channelStreamsCache[handle];
-                delete this.channelCacheTimestamps[handle];
+            const cfg = this.channelConfigs[slot];
+            if (cfg) {
+                delete this.liveStreamsCache[cfg.channelHandle];
+                delete this.cacheTimestamps[cfg.channelHandle];
             }
-
-            const wrapper = document.getElementById(`dropdown-wrapper-${slot}`);
-            if (wrapper) wrapper.classList.remove("hidden");
-
-            const selected = document.getElementById(`dropdown-selected-${slot}`);
-            if (selected) selected.textContent = "Choose a live stream...";
-
+            
+            const wr = document.getElementById(`dropdown-wrapper-${slot}`);
+            if (wr) wr.classList.remove("hidden");
+            
+            const ht = document.getElementById(`dropdown-selected-${slot}`);
+            if (ht) ht.textContent = "Choose a live stream...";
+            
             const dd = document.getElementById(`stream-dropdown-${slot}`);
             if (dd) dd.classList.remove("open");
-
+            
             this.fetchLiveStreamsWithoutAutoLoad(slot);
         }
 
         showDropdown(slot) {
-            const wrapper = document.getElementById(`dropdown-wrapper-${slot}`);
-            if (wrapper) wrapper.classList.remove("hidden");
-
-            const selected = document.getElementById(`dropdown-selected-${slot}`);
-            if (selected) selected.textContent = "Choose a live stream...";
-
+            const wr = document.getElementById(`dropdown-wrapper-${slot}`);
+            if (wr) wr.classList.remove("hidden");
+            
+            const ht = document.getElementById(`dropdown-selected-${slot}`);
+            if (ht) ht.textContent = "Choose a live stream...";
+            
             this.fetchLiveStreams(slot);
         }
     }
@@ -3452,18 +3457,17 @@
 
     window.addEventListener("beforeunload", () => {
         if (app.muteCheckInterval) clearInterval(app.muteCheckInterval);
-        Object.values(app.slotStates).forEach(st => { if (st.timerId) clearTimeout(st.timerId); });
+        Object.values(app.slotStates).forEach(st => {
+            if (st.timerId) clearTimeout(st.timerId);
+        });
     });
 
     document.getElementById("modal-url")?.addEventListener("keydown", e => {
-        if (e.key === "Enter") {
-            e.preventDefault();
-            app.confirmModal();
-        }
+        if (e.key === "Enter") window.app?.confirmModal();
     });
 
     window.addEventListener("keydown", e => {
-        if (e.key === "Escape") app.closeModal();
+        if (e.key === "Escape") window.app?.closeModal();
     });
 </script>
 </body>
