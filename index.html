@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <title>COMP_WIDE_MCR_TOOLS_V1</title>
+        <title>COMP_WIDE_MCR_TOOLS_V2</title>
         <link
             href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
             rel="stylesheet"
@@ -2220,8 +2220,34 @@
         <script>
             // =============================================
             const WORKING_PROXIES = [
+                // your originals
                 (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
                 (url) => `https://cors.eu.org/${url}`,
+
+                // 🔥 high success rate
+                (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+                (url) => `https://corsproxy.org/?${encodeURIComponent(url)}`, // simple + fast :contentReference[oaicite:1]{index=1}
+                (url) => `https://proxy.corsfix.com/?${url}`, // newer + stable :contentReference[oaicite:2]{index=2}
+
+                // 🔥 alternative formats
+                (url) => `https://corsfix.com/proxy?${encodeURIComponent(url)}`, // :contentReference[oaicite:3]{index=3}
+                (url) => `https://jsonp.afeld.me/?url=${encodeURIComponent(url)}`,
+                (url) => `https://yacdn.org/proxy/${url}`,
+                (url) => `https://test.cors.workers.dev/?${encodeURIComponent(url)}`,
+                (url) => `https://cors-anywhere.herokuapp.com/${url}`, // often requires manual unlock :contentReference[oaicite:4]{index=4}
+
+                // ⚠️ unstable but sometimes work
+                (url) => `https://cors.x2u.in/?url=${encodeURIComponent(url)}`, // rate limited :contentReference[oaicite:5]{index=5}
+                (url) => `https://thebugging.com/apis/cors-proxy?url=${encodeURIComponent(url)}`,
+                (url) => `https://cors.sh/${url}`,
+                (url) => `https://proxy.cors.sh/${url}`,
+                (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+                (url) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(url)}`,
+
+                // 🧪 legacy (hit or miss)
+                (url) => `https://crossorigin.me/${url}`,
+                (url) => `http://www.whateverorigin.org/get?url=${encodeURIComponent(url)}&callback=`,
+                (url) => `https://universal-cors-proxy.glitch.me/${url}`,
             ];
 
             // =============================================
